@@ -1,0 +1,47 @@
+name: gab-poc-ghaw-safeoutputs-mass-assignment
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pinned gh-aw-actions (v0.79.8 runtime used by target)
+        uses: actions/checkout@v4
+        with:
+          repository: github/gh-aw-actions
+          ref: c0338fef4749d08c21f8f975fb0e37efa17dda47
+          path: gha
+          sparse-checkout: |
+            setup/js
+          sparse-checkout-cone-mode: true
+
+      - name: Reproduce undeclared-field pass-through in safe-output validator
+        working-directory: gha/setup/js
+        env:
+          GH_AW_VALIDATION_CONFIG: '{"add_comment":{"defaultMax":1,"fields":{"body":{"required":true,"type":"string","sanitize":true,"maxLength":65000},"item_number":{"issueOrPRNumber":true},"reply_to_id":{"type":"string","maxLength":256},"repo":{"type":"string","maxLength":256}}}}'
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const { validateItem } = require('./safe_output_type_validator.cjs');
+
+          // Exactly the add_comment tool schema declared by the target lock file.
+          // comment_id is NOT a declared field, but sneaks in from the raw NDJSON item.
+          const raw = { type: 'add_comment', body: 'legitimate triage text', comment_id: 4242 };
+          const result = validateItem(raw, 'add_comment', 1, {});
+          console.log('validator result:', JSON.stringify(result));
+
+          if (!result.isValid) {
+            console.log('VALIDATION_REJECTED');
+            process.exit(2);
+          }
+          if (result.normalizedItem.comment_id === 4242) {
+            console.log('MASS_ASSIGNMENT_CONFIRMED: undeclared comment_id survived into normalizedItem');
+          } else {
+            console.log('FIELD_STRIPPED: undeclared comment_id was dropped');
+            process.exit(1);
+          }
+          EOF
